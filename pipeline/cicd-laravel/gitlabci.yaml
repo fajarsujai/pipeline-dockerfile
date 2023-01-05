@@ -1,0 +1,91 @@
+image: docker:20.10.16
+
+stages:
+  - build
+  - deploy
+
+# services:
+#   - docker:20.10.16-dind
+
+before_script:
+  - docker info
+  - docker-compose version
+
+deploy_staging:
+  stage: deploy
+  script:
+    - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - echo ${CI_COMMIT_TAG}
+    - ssh root@server-staging "cd /var/www/app && git pull origin main && composer install --no-interaction && exit"
+  environment:
+    name: ${CI_JOB_NAME}
+  when: on_success
+  only:
+    - /v\.*.*.*/
+
+deploy_migrate_staging:
+  stage: deploy
+  script:
+    - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY")
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - echo ${CI_COMMIT_TAG}
+    - ssh root@serverprod "cd /var/www/app && git pull origin main && php artisan migrate --path=/database/migrations/${CI_COMMIT_TAG} --force && composer install --no-interaction && exit"
+  environment:
+    name: ${CI_JOB_NAME}
+  when: on_success
+  only:
+    - /2022\_.*/
+
+deploy_migrate_production:
+  stage: deploy
+  script:
+    - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY_PROD")
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - echo ${CI_COMMIT_TAG}
+    - ssh root@serverprod "cd /var/www/app && git pull origin main && php artisan migrate --path=/database/migrations/${CI_COMMIT_TAG} --force  && composer install --no-interaction && exit"
+  environment:
+    name: ${CI_JOB_NAME}
+  when: on_success
+  only:
+    - /2022\_.*/
+
+deploy_production:
+  stage: deploy
+  script:
+    - "which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )"
+    - eval $(ssh-agent -s)
+    - ssh-add <(echo "$SSH_PRIVATE_KEY_PROD")
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+    - ssh root@serverprod "cd /var/www/app && git pull origin main && composer install --no-interaction && exit"
+  environment:
+    name: ${CI_JOB_NAME}
+  when: manual
+  only:
+    - /v\.*.*.*/
+
+build_image:
+  stage: build
+  script:
+    - docker pull $CI_REGISTRY_IMAGE:latest || true
+    - docker build --cache-from $CI_REGISTRY_IMAGE:latest -t $CI_REGISTRY_IMAGE:${CI_COMMIT_SHA}  .
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker push $CI_REGISTRY_IMAGE:${CI_COMMIT_SHA}
+    - docker rmi $CI_REGISTRY_IMAGE:${CI_COMMIT_SHA}
+  when: on_success
+  only:
+    - /build_deploy\_.*/
